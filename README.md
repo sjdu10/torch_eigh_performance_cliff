@@ -1,11 +1,11 @@
 # torch_eigh_performance_cliff
-Observation of performance cliff of pytorch batched eigh operation for different matrix size. Proposal of my solution to it.
+Observation of performance cliff of pytorch batched eigh operation for different matrix size, and my solution to it.
 
-## 1. Observation in stock PyTorch `eigh` performance
+## 1. Observation in default PyTorch `eigh` performance
 
 `torch.linalg.eigh` applied to a batch of (B, n, n) symmetric matrices exhibits smooth scaling for n<=32, then an abrupt 80-140x slowdown at n=33.
 
-**Table 1: Stock `torch.linalg.eigh` timing (ms) vs. matrix size n.**
+**Table 1: Default `torch.linalg.eigh` timing (ms) vs. matrix size n.**
 
 |  n  | B=64 time (ms) | B=64 ratio | B=1024 time (ms) | B=1024 ratio |
 |----:|---------------:|-----------:|------------------:|-------------:|
@@ -42,14 +42,14 @@ if (batchCount(eigenvectors) > 1) {
 
 This is similar to the approach JAX took in [jax-ml/jax#31375](https://github.com/jax-ml/jax/pull/31375) (merged September 2025): route all batched `eigh` through `cusolverDnXsyevBatched`, replacing the per-matrix `syevd` loop.
 
-**Correctness.** In our test, the maximum eigenvalue difference |delta| w.r.t. results from stock `torch.linalg.eigh` and eigenvector residual ||Av - lambda v|| are required to be smaller than 1e-10 to ensure the correctness of the eigen decomposition. For an example case at (B=16, n=48), we have verified |delta|=0 and ||Av - lambda v||=2.13e-13, which pass the correctness test.
+**Correctness.** In our test, the maximum eigenvalue difference |delta| w.r.t. results from default `torch.linalg.eigh` and eigenvector residual ||Av - lambda v|| are required to be smaller than 1e-10 to ensure the correctness of the eigen decomposition. For an example case at (B=16, n=48), we have verified |delta|=0 and ||Av - lambda v||=2.13e-13, which pass the correctness test.
 
 **Performance.**
-We compare the `eigh` performance for stock `torch.linalg.eigh` and our proposed fix using `XsyevBatched` for batched matrix input, see Table 2&3.
+We compare the `eigh` performance for default `torch.linalg.eigh` and our proposed fix using `XsyevBatched` for batched matrix input, see Table 2&3.
 
-**Table 2: Stock `eigh` vs. `XsyevBatched` extension (B=64, `float64`).**
+**Table 2: Default `eigh` vs. `XsyevBatched` extension (B=64, `float64`).**
 
-|  n  | stock (ms) | XsyevBatched (ms) | speedup  |
+|  n  | default (ms) | XsyevBatched (ms) | speedup  |
 |----:|-----------:|-------------------:|:---------|
 |   8 |       0.29 |               0.20 | 1.5x     |
 |  16 |       0.52 |               0.41 | 1.3x     |
@@ -64,9 +64,9 @@ We compare the `eigh` performance for stock `torch.linalg.eigh` and our proposed
 |  96 |      246.2 |               6.74 | **37x**  |
 | 128 |      316.0 |               9.88 | **32x**  |
 
-**Table 3: Stock `eigh` vs. `XsyevBatched` extension (B=1024, `float64`).**
+**Table 3: Default `eigh` vs. `XsyevBatched` extension (B=1024, `float64`).**
 
-|  n  | stock (ms) | XsyevBatched (ms) | speedup  |
+|  n  | default (ms) | XsyevBatched (ms) | speedup  |
 |----:|-----------:|-------------------:|:---------|
 |   8 |       0.91 |               0.75 | 1.2x     |
 |  16 |       2.86 |               2.66 | 1.1x     |
@@ -85,7 +85,7 @@ We compare the `eigh` performance for stock `torch.linalg.eigh` and our proposed
 
 1. The n=32 to 33 performance cliff is **completely eliminated** --- timing scales smoothly across all n.
 2. **32-77x speedup** for n>32, with no regression for n<=32.
-3. **Numerically identical** to stock PyTorch (same cuSOLVER API, just called unconditionally).
+3. **Numerically identical** to default PyTorch (same cuSOLVER API, just called unconditionally).
 4. The fix is a **one-line dispatch change**, using an API PyTorch already wraps.
 5. This matches what [JAX shipped in September 2025](https://github.com/jax-ml/jax/pull/31375).
 
