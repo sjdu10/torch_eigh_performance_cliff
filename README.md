@@ -22,9 +22,38 @@ Observation of performance cliff of pytorch batched eigh operation for different
 |  96 |          246.2 |      234x  |              3685 |        444x  |
 | 128 |          316.0 |      301x  |              4783 |        576x  |
 
-## 2. The fix: dispatch updated cuSOLVER batched `eigh` (`cusolverDnXsyevBatched`), as in JAX PR #31375
+## 2 Root cause: PyTorch's dispatch heuristics
 
-`cusolverDnXsyevBatched` (available since cuSOLVER 11.7.1 / CUDA 12.6) is a genuinely batched eigensolver (divide-and-conquer, or Jacobi for n<=32) with **no matrix-size limitation**. PyTorch already wraps it and uses it for n<=32. The fix is to remove the n<=32 gate:
+The dispatch lives in `aten/src/ATen/native/cuda/linalg/BatchLinearAlgebraLib.cpp`, function `linalg_eigh_cusolver` (line ~1614):
+
+```cpp
+if (use_cusolver_syevj_batched_
+    && batchCount(eigenvectors) > 1
+    && eigenvectors.size(-1) <= 32) {
+    // genuinely batched: calls cusolverDnXsyevBatched
+    linalg_eigh_cusolver_syevj_batched();
+} else if (scalar_type == kFloat
+           && size >= 32 && size <= 512) {
+    // single-matrix Jacobi, LOOPED over batch
+    linalg_eigh_cusolver_syevj();
+} else {
+    // single-matrix divide-and-conquer, LOOPED
+    linalg_eigh_cusolver_syevd();
+}
+```
+
+The branching heuristics:
+
+- **n<=32, batch>1**: correctly routes to `linalg_eigh_cusolver_syevj_batched()`, which (since PR #155695, cuSOLVER >= 11701) calls `cusolverDnXsyevBatched` --- a new batched API alternative to the legacy `cusolverDn<t>syevjBatched`. (We find that this is fast even for batched matrices of size n>32.)
+
+- **Otherwise**: falls through to the `else if` or `else` branches, which call single-matrix wrappers (`syevj` or `syevd`) in a *loop*. Each matrix is solved sequentially with a separate kernel launch. This is where the 80-120x cliff comes from.
+
+The n<=32 gate for batched input is a leftover from the poor performance of the old `syevjBatched` Jacobi API (see PR #53040), which was replaced by the newer/faster `cusolverDnXsyevBatched` in PR #155695 (June 2025). The top-level dispatch condition was never updated.
+
+## 3. The fix: dispatch updated cuSOLVER batched `eigh` (`cusolverDnXsyevBatched`), as in JAX PR #31375
+
+`cusolverDnXsyevBatched` (available since cuSOLVER 11.7.1 / CUDA 12.6) is a newer batched eigensolver (divide-and-conquer, or Jacobi for n<=32) alternative to older `cusolverDn<t>syevjBatched`. PyTorch already wraps it and uses it for n<=32. The fix is to remove the n<=32 gate:
+
 ```cpp
 // Proposed change in linalg_eigh_cusolver:
   // cusolverDnXsyevBatched works for all n when batch size > 1.
@@ -40,7 +69,7 @@ if (batchCount(eigenvectors) > 1) {
 }
 ```
 
-This is similar to the approach JAX took in [jax-ml/jax#31375](https://github.com/jax-ml/jax/pull/31375) (merged September 2025): route all batched `eigh` through `cusolverDnXsyevBatched`, replacing the per-matrix `syevd` loop.
+This is to route all batched `eigh` through `cusolverDnXsyevBatched`, replacing the per-matrix `syevd` loop for n>32. This fix is probably similar to the approach JAX took in [jax-ml/jax#31375](https://github.com/jax-ml/jax/pull/31375) (merged September 2025).
 
 **Correctness.** In our test, the maximum eigenvalue difference |delta| w.r.t. results from default `torch.linalg.eigh` and eigenvector residual ||Av - lambda v|| are required to be smaller than 1e-10 to ensure the correctness of the eigen decomposition. For an example case at (B=16, n=48), we have verified |delta|=0 and ||Av - lambda v||=2.13e-13, which pass the correctness test.
 
