@@ -233,16 +233,3 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
           py::arg("input"), py::arg("upper") = false);
 }
 ```
-## Citation
-
-If you find this repository helpful in your research or project, please consider citing it:
-
-```bibtex
-@misc{du_torch_eigh_performance_cliff,
-  author = {Du, Sijing},
-  title = {torch\_eigh\_performance\_cliff},
-  year = {2026},
-  publisher = {GitHub},
-  journal = {GitHub repository},
-  howpublished = {\url{[https://github.com/sjdu10/torch_eigh_performance_cliff](https://github.com/sjdu10/torch_eigh_performance_cliff)}},
-}
